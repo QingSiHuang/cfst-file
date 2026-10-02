@@ -1,0 +1,138 @@
+# filehub — 轻量级文件分发系统
+
+> 🌐 **项目预览**：[https://files.ctyun2026.de5.net/](https://files.ctyun2026.de5.net/)（管理界面需口令登录，页面即本仓库源码部署的真实运行效果）
+
+基于 **Cloudflare Worker + S3 兼容对象存储**的单文件文件分发系统。
+
+零依赖、免数据库、免服务器：一个 Worker 脚本包含全部后端逻辑与管理前端，部署即用，运行成本为零（免费计划即可）。
+
+已在**中国科技云（CSTCloud）对象存储**上实测通过，也可用于任何 S3 兼容存储（需支持 SigV4 头签名与分片上传）。
+
+## 功能特性
+
+| 功能 | 说明 |
+|---|---|
+| 大文件分片上传 | 8MB/片 × 3 并发经 Worker 中转，突破 Cloudflare Worker 100MB 请求体限制，单文件最大 20GB |
+| 实时状态栏 | 文件名 / 大小 / 速度 / 进度条 / 预计剩余时间，500ms 刷新（XHR upload.onprogress） |
+| 上传队列 | 单飞队列（前一个完成才开始下一个），文件选中瞬间即渲染卡片，可取消、可插队 |
+| 断点续传 | 中断后重新选择同一文件自动续传（localStorage 记录 + 服务端会话复用） |
+| 限时分享链接 | 1/7/30/365 天或永久有效，HMAC 签名防篡改、过期自动失效，收件人**无需口令** |
+| Range 断点下载 | 下载/视频拖动进度条均支持（206 Partial Content） |
+| 额度管控 | ListBuckets 逐桶实时统计**全账号真实用量**，上传前自动拦截放不下的文件 |
+| 中文文件名 | 分享下载自动带 UTF-8 Content-Disposition，浏览器显示原始文件名 |
+
+## 使用说明
+
+1. 打开系统首页，输入管理口令登录（浏览器记住，换设备需重输）
+2. 点击或拖拽文件到上传区，可一次选多个（自动排队）
+3. 上传过程实时显示速度/进度/剩余时间；排队文件显示"等待中"，急件可点【插队】提前，随时可点【取消】
+4. 上传完成后，在文件列表点【复制链接】生成限时分享链接（可选有效期），发给对方即可
+5. 对方打开链接直接下载，无需口令、无需注册
+6. 文件不用了点【删除】，额度实时回收（界面"已用 X / 20GB"会立即更新）
+
+## 部署指南
+
+### 1. 前置条件
+
+- Cloudflare 账号（免费计划即可）
+- 任一 S3 兼容对象存储的 Access Key / Secret Key / 桶名（本文以中科云 s3.cstcloud.cn 为例）
+
+### 2. 配置 Worker Secrets
+
+在 Cloudflare 控制台（Worker → Settings → Variables and Secrets）或通过 API 添加：
+
+| Secret | 说明 |
+|---|---|
+| `S3_AK` | 对象存储 Access Key ID |
+| `S3_SK` | 对象存储 Secret Access Key |
+| `S3_BUCKET` | 存储桶名 |
+| `ADMIN_TOKEN` | 管理口令（自己设定，用于登录管理界面） |
+| `SHARE_SECRET` | 分享链接签名密钥（建议随机 32 位以上） |
+
+可选 Vars：`S3_ENDPOINT`（默认 `s3.cstcloud.cn`）、`S3_REGION`（默认 `cn-north-1`）
+
+### 3. 部署脚本
+
+方式一：控制台粘贴 `filehub-worker.js` 内容保存。
+
+方式二：API 部署（Token 需"Workers 脚本：编辑"权限）：
+
+```bash
+ACCOUNT_ID="<你的AccountID>"
+API_TOKEN="<你的API Token>"
+curl -X PUT "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/filehub" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -F 'metadata={"main_module":"filehub-worker.js","compatibility_date":"2024-09-01"};type=application/json' \
+  -F "filehub-worker.js=@filehub-worker.js;type=application/javascript+module"
+```
+
+Secrets API 示例（注意 `type` 字段必填）：
+
+```bash
+curl -X PUT "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/filehub/secrets" \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"S3_AK","text":"<你的AK>","type":"secret_text"}'
+```
+
+### 4. 绑定自定义域名
+
+控制台：Worker → Settings → Domains & Routes → Add Custom Domain。
+API 方式（"Workers 脚本：编辑"权限即可，无需 DNS 权限）：
+
+```bash
+curl -X PUT "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/domains" \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"hostname":"files.yourdomain.com","service":"filehub","environment":"production"}'
+```
+
+## 开发说明
+
+### 架构
+
+```
+浏览器（内嵌管理页，同源）
+   │ 上传：File.slice() 8MB分片 → XHR PUT /api/part（实时进度）
+   ▼
+Cloudflare Worker（单文件：SigV4 签名 + 上传协调 + 下载代理 + 前端 HTML）
+   │ SigV4 头签名（UNSIGNED-PAYLOAD 流式转发，不缓存分片字节）
+   ▼
+S3 兼容存储（Multipart Upload：Create → UploadPart → Complete）
+   │
+下载：分享链接 /f/{key}?e={过期时间}&s={HMAC签名} → Worker 校验签名
+      → 服务端签名 GET + Range 透传 → 流式回传（206 支持）
+```
+
+### 为什么是"Worker 中转"而不是"预签名直传"
+
+实测部分 S3 网关（如中科云）会拦截一切无 Authorization 头的请求，导致预签名 URL（SigV4/SigV2）与公读 ACL 均不可用。此时浏览器直传路线被堵死，改用 Worker 中转：
+
+- 每片 8MB 远小于 Worker 100MB 请求体限制，天然合规
+- Worker 只做签名转发（`UNSIGNED-PAYLOAD` + 流式 body），CPU 消耗极低，免费计划 10ms CPU 限制内可运行
+- 权限全部集中在 Worker（管理口令 + 分享 HMAC），存储桶保持全私有
+
+### 关键设计
+
+| 点 | 决策 |
+|---|---|
+| 断点续传 | 前端 localStorage 记录 `{key, uploadId, chunkSize, done分片表}`；`/api/init` 支持 resume 复用会话（分片边界由文件大小决定，恒一致）；服务端 ListParts 在部分网关有 bug，故不依赖 |
+| 速度统计 | 500ms 采样 + 指数平滑（`v = v*0.7 + inst*0.3`）防抖动 |
+| 取消上传 | abort 全部 XHR → 调 `/api/abort` 清服务端 MPU 分片 → 清断点记录；重试逻辑区分"用户取消"（不重试）与"网络错误"（重试） |
+| 队列单飞 | 严格"前一个结束才启动下一个"（busy 标志），避免分片带宽被多文件争抢 |
+| 额度统计 | `GET /`（ListBuckets）+ 逐桶 ListObjects 实时累加，不用 Worker 内存缓存（边缘多实例下不可靠） |
+| 目录占位对象 | 部分 S3 网关在 Complete 时自动创建 0 字节目录对象，列表接口按 `key.endsWith('/')` 过滤 |
+
+### 已知限制
+
+- 上传/下载速度受对象存储公网入口带宽限制（Worker 中转又叠加 Cloudflare 边缘链路），几十 MB 文件分钟级、GB 级需小时级
+- 分片上传会话保存在前端 localStorage，换浏览器/设备续传需重新上传
+- ListMultipartUploads 中断残留需手动清理（取消功能已自动处理）
+
+## 安全说明
+
+- 所有密钥仅存于 Cloudflare Worker Secrets，**源码不含任何硬编码凭据**
+- 管理操作需口令（`X-Auth-Token` 头）；分享链接带 HMAC 签名与过期时间，防篡改
+- 存储桶保持 private，匿名访问一律拒绝
+
+## 许可
+
+仅供个人学习与内部使用。

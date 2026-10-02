@@ -1,0 +1,7 @@
+# 本地敏感文件（切勿提交）
+.temp/
+*.log
+*.env
+credentials*
+*token*
+中科云.md
