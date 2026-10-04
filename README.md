@@ -4,7 +4,7 @@
 
 基于 **Cloudflare Worker + S3 兼容对象存储**的单文件文件分发系统。
 
-零依赖、免数据库、免服务器：一个 Worker 脚本包含全部后端逻辑与管理前端，部署即用，运行成本为零（免费计划即可）。
+零依赖、免服务器：一个 Worker 脚本包含全部后端逻辑与管理前端，部署即用，运行成本为零（免费计划即可）；D1 数据库为**可选项**（仅操作审计日志需要），不绑定也可完整使用。
 
 已在**中国科技云（CSTCloud）对象存储**上实测通过，也可用于任何 S3 兼容存储（需支持 SigV4 头签名与分片上传）。
 
@@ -20,6 +20,9 @@
 | Range 断点下载 | 下载/视频拖动进度条均支持（206 Partial Content） |
 | 额度管控 | ListBuckets 逐桶实时统计**全账号真实用量**，上传前自动拦截放不下的文件 |
 | 中文文件名 | 分享下载自动带 UTF-8 Content-Disposition，浏览器显示原始文件名 |
+| 操作审计日志 | 上传/下载/删除全部记录（公网 IP、系统、浏览器、时间），默认显示最新 10 条，点击「加载更多」无限追加 |
+| 列排序审计 | 使用记录表头可点击排序（文件名/动作/时间/IP，升序↔降序切换），按任一维度归拢查看 |
+| 本地时区显示 | 数据库存 UTC 标准时间，界面按浏览器本地时区显示，跨时区访问者各自看到准确时间 |
 
 ## 使用说明
 
@@ -28,7 +31,8 @@
 3. 上传过程实时显示速度/进度/剩余时间；排队文件显示"等待中"，急件可点【插队】提前，随时可点【取消】
 4. 上传完成后，在文件列表点【复制链接】生成限时分享链接（可选有效期），发给对方即可
 5. 对方打开链接直接下载，无需口令、无需注册
-6. 文件不用了点【删除】，额度实时回收（界面"已用 X / 20GB"会立即更新）
+6. 文件不用了点【删除】，额度实时回收（界面“已用 X / 20GB”会立即更新）
+7. 文件列表下方的「使用记录」实时记录每次上传/下载/删除（含操作者 IP 与设备信息）；点击表头可按文件名/动作/时间/IP 排序，便于审计某个文件的完整流转
 
 ## 部署指南
 
@@ -51,7 +55,24 @@
 
 可选 Vars：`S3_ENDPOINT`（默认 `s3.cstcloud.cn`）、`S3_REGION`（默认 `cn-north-1`）
 
-### 3. 部署脚本
+### 3.（可选）绑定 D1 数据库（操作审计日志）
+
+「使用记录」依赖 Cloudflare D1（免费额度：5GB 存储 / 500 万行读 / 10 万行写 每天）。**不绑定 D1 时系统功能完整可用，仅无审计记录**（表结构首次访问自动创建，无需手动建表）。
+
+控制台方式：Storage & Databases → D1 → Create database（如 `filehub-db`），然后 Worker → Settings → Bindings → Add → D1 database，变量名设为 **`DB`**。
+
+API 方式（需 D1 编辑权限）：
+
+```bash
+# 创建数据库，记下返回的 uuid
+curl -X POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/d1/database" \
+  -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"filehub-db"}'
+```
+
+部署时在 metadata 中携带绑定：`"bindings":[{"type":"d1","name":"DB","id":"<数据库uuid>"}]`
+
+### 4. 部署脚本
 
 方式一：控制台粘贴 `filehub-worker.js` 内容保存。
 
@@ -74,7 +95,7 @@ curl -X PUT "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/s
   -d '{"name":"S3_AK","text":"<你的AK>","type":"secret_text"}'
 ```
 
-### 4. 绑定自定义域名
+### 5. 绑定自定义域名
 
 控制台：Worker → Settings → Domains & Routes → Add Custom Domain。
 API 方式（"Workers 脚本：编辑"权限即可，无需 DNS 权限）：
@@ -120,6 +141,8 @@ S3 兼容存储（Multipart Upload：Create → UploadPart → Complete）
 | 队列单飞 | 严格"前一个结束才启动下一个"（busy 标志），避免分片带宽被多文件争抢 |
 | 额度统计 | `GET /`（ListBuckets）+ 逐桶 ListObjects 实时累加，不用 Worker 内存缓存（边缘多实例下不可靠） |
 | 目录占位对象 | 部分 S3 网关在 Complete 时自动创建 0 字节目录对象，列表接口按 `key.endsWith('/')` 过滤 |
+| 审计日志 | 上传/下载/删除各写一条流水（logs 表，含文件名/动作/IP/系统/浏览器）；下载记录 60 秒防刷窗口（同 IP 同文件的连续 Range 请求不重复计数），跨次下载独立记录 |
+| 排序安全 | 列排序参数经白名单（id/file_name/action/ip/log_time）校验后拼接 SQL，防注入 |
 
 ### 已知限制
 
