@@ -4,4 +4,15 @@
 *.env
 credentials*
 *token*
+
+# 依赖与构建产物（非源码）
+node_modules/
+.wrangler/
+package-lock.json
+
+# 本地备份（勿上传）
+*.bak
+*.可用版*
+
+# 中科云.md
 中科云.md
