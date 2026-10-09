@@ -264,8 +264,9 @@ async function handleShare(env, url) {
   if (!key.startsWith('files/')) return json(400, { error: '非法key' });
   let exp = 0;
   if (days > 0) exp = Math.floor(Date.now() / 1000) + days * 86400;
-  // 同文件 + 同时长 复用同一短码：复制 N 次都是同一个链接，已分享的不会失效，也不会一个文件无数链接
-  if (env.DB) {
+  // 短链仅用于「有时限」的分享（days>0）：同文件+同时长复用同一短码
+  // days=0 永久分享保持 HMAC 长链形式（/f/...?e=&s=），与前端下载按钮的 &dl=1 拼接兼容，避免 401
+  if (env.DB && days > 0) {
     await ensureDB(env);
     // 幂等复用：同文件+同时长固定一码。并发下若插入冲突(唯一索引)，回退读取已存在的那行，绝不丢短链
     let exist = await env.DB.prepare('SELECT code FROM shares WHERE file_key=? AND days=?').bind(key, days).first();
