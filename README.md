@@ -166,8 +166,6 @@ S3 兼容存储（Multipart Upload：Create → UploadPart → Complete）
 2. **D1 唯一索引**：复制链接查询走索引（O(log n)），避免全表扫描。
 3. **边缘 Rate Limiting（可选，免费套餐可用、不按量计费）**：在 Cloudflare 控制台 Security → WAF → Rate limiting rules 建一条规则，匹配 `URI Path` 等于 `*/api/share*`，按 IP 每 10 秒超过 10 次则 Block 10 秒。免费套餐提供 1 条规则、按 IP 计数、周期仅 10 秒档；可挡恶意脚本高频刷，被拦请求不进 Worker、不碰 D1，最省额度。
 
-> 说明：早期版本曾误称为"KV"，实际短链映射使用 **D1 数据库**，并非 KV。
-
 ## 安全说明
 
 - 所有密钥仅存于 Cloudflare Worker Secrets，**源码不含任何硬编码凭据**
