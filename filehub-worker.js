@@ -61,7 +61,7 @@ async function s3Fetch(env, method, rawKeyPath, query, opts) {
 function json(status, obj) { return new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json; charset=utf-8' } }); }
 function xmlUnescape(s) { return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&'); }
 function safeName(name) {
-  return String(name).replace(/[\r\n\t\0\\/]/g, '_').replace(/\.{2,}/g, '.').replace(/[<>:"|?*]/g, '_').slice(0, 180) || 'unnamed';
+  return String(name).replace(/[\r\n\t\0\\/]/g, '_').replace(/\.{2,}/g, '.').replace(/[<>:"|?*()]/g, '_').slice(0, 180) || 'unnamed';
 }
 function randId(n) { const b = crypto.getRandomValues(new Uint8Array(n)); return [...b].map(x => x.toString(16).padStart(2, '0')).join('').slice(0, n * 2); }
 function buildKey(name) {
